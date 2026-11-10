@@ -23,8 +23,12 @@ def cli_argument_parser():
                                 help='Grain amount for film')
     parser.add_argument('--threshold', type=float, default=40,
                                     help='Threshold amount for neon')
-    parser.add_argument('--glow_ksize', type=int, default=7,
-                                    help='ksize amount for neon')
+    parser.add_argument('--glow', type=float, default=0.8,
+                                    help='size amount for neon')
+    parser.add_argument('--glow_width', type=int, default=4,
+                                    help='width amount for neon')
+    parser.add_argument('--line_width', type=int, default=1,
+                                        help='line_width amount for neon')
     parser.add_argument('--radius', type=float, default=0.4,
                                         help='radius amount for matte')
     parser.add_argument('--softness', type=float, default=0.9,

@@ -169,64 +169,64 @@ class ScratchesFilter(ImageFilter, filter_name='scratches'):
         return img
 
 
-class NeonFilter(ImageFilter, filter_name='neon'):
-    def __init__(self):
+class Neon(ImageFilter, filter_name='neon'):
+    def __init__(self, color=(255, 255, 50)):
         self.threshold = self._cli_args.threshold
-        self.glow_ksize = self._cli_args.glow_ksize
+        self.glow = self._cli_args.glow
+        self.color = color
+        self.glow_width = self._cli_args.glow_width
+        self.line_width = self._cli_args.line_width
 
     @staticmethod
-    def convolve2d(img, kernel):
-        kh, kw = kernel.shape
-        padded = np.pad(img, ((kh//2, kh//2), (kw//2, kw//2)), mode='edge')
-        windows = sliding_window_view(padded, (kh, kw))
-        return np.sum(windows * kernel, axis=(-1, -2))
+    def _dilate(mask):
+        out = mask.copy()
+        out[1:, :] = np.maximum(out[1:, :], mask[:-1, :])
+        out[:-1, :] = np.maximum(out[:-1, :], mask[1:, :])
+        out[:, 1:] = np.maximum(out[:, 1:], mask[:, :-1])
+        out[:, :-1] = np.maximum(out[:, :-1], mask[:, 1:])
+        return out
 
-    @staticmethod
-    def blur_channel(ch, kernel_1d, k):
-        pad = k // 2
-        padded = np.pad(ch, ((0, 0), (pad, pad)), mode='edge')
-        blurred = np.zeros_like(ch)
-        for i in range(k):
-            blurred += kernel_1d[i] * padded[:, i:i+ch.shape[1]]
-        padded = np.pad(blurred, ((pad, pad), (0, 0)), mode='edge')
-        blurred = np.zeros_like(ch)
-        for i in range(k):
-            blurred += kernel_1d[i] * padded[i:i+ch.shape[0], :]
-        return blurred
+    def _glow_by_dilation(self, mask, sigma):
+        glow = mask * 0.4
+        current = mask
+        radius = max(1, int(sigma * 3))
+        for r in range(1, radius + 1):
+            current = self._dilate(current)
+            weight = np.exp(-(r * r) / (2 * sigma * sigma)) * 0.4
+            glow = np.maximum(glow, current * weight)
+        return glow
 
     def apply_filter(self, image):
-        gray = GrayscaleFilter().apply_filter(image)
-        gray_f = gray.astype(np.float32)
+        img = image.astype(np.float32)
+        b, g, r = img[:, :, 0], img[:, :, 1], img[:, :, 2]
+        gray = 0.2126 * r + 0.7152 * g + 0.0722 * b
 
-        Kx = np.array([[-1, 0, 1],
-                    [-2, 0, 2],
-                    [-1, 0, 1]], dtype=np.float32)
-        Ky = np.array([[-1, -2, -1],
-                    [ 0,  0,  0],
-                    [ 1,  2,  1]], dtype=np.float32)
+        gx = np.zeros_like(gray)
+        gy = np.zeros_like(gray)
+        gx[:, 1:-1] = gray[:, 2:] - gray[:, :-2]
+        gy[1:-1, :] = gray[2:, :] - gray[:-2, :]
+        mag = np.sqrt(gx * gx + gy * gy)
 
-        gx = self.convolve2d(gray_f, Kx)
-        gy = self.convolve2d(gray_f, Ky)
+        mask = (mag > self.threshold).astype(np.float32)
 
-        magnitude = np.sqrt(gx * gx + gy * gy)
-        if magnitude.max() > 0:
-            magnitude = magnitude / magnitude.max() * 255.0
+        for _ in range(max(0, self.line_width - 1)):
+            mask = self._dilate(mask)
 
-        edges = (magnitude > self.threshold).astype(np.float32)
+        sigma = max(1.0, float(self.glow_width))
+        glow_mask = self._glow_by_dilation(mask, sigma)
 
-        neon_color = np.array([255.0, 255.0, 0.0], dtype=np.float32)
-        edge_layer = edges[..., None] * neon_color
+        cb, cg, cr = self.color
+        base = img * 0.65
 
-        k = self.glow_ksize
-        sigma = k / 6.0
-        x = np.arange(k) - (k - 1) / 2
-        kernel_1d = np.exp(-x**2 / (2 * sigma**2))
-        kernel_1d /= kernel_1d.sum()
+        edges = np.zeros_like(img)
+        edges[:, :, 0] = mask * cb
+        edges[:, :, 1] = mask * cg
+        edges[:, :, 2] = mask * cr
 
-        glow = np.zeros_like(edge_layer, dtype=np.float32)
-        for c in range(3):
-            glow[:, :, c] = self.blur_channel(edge_layer[:, :, c], kernel_1d, k)
+        glow_layer = np.zeros_like(img)
+        glow_layer[:, :, 0] = glow_mask * cb
+        glow_layer[:, :, 1] = glow_mask * cg
+        glow_layer[:, :, 2] = glow_mask * cr
 
-        result = image.astype(np.float32) + edge_layer * 0.5 + glow * 0.9
-        result = np.clip(result, 0, 255).astype(np.uint8)
-        return result
+        out = base + edges + glow_layer * self.glow
+        return np.clip(out, 0, 255).astype(np.uint8)
